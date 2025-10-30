@@ -1,0 +1,22 @@
+h1.ant-typography {
+    justify-content: space-between;
+}
+.freelancer-general {
+    position: relative;
+}
+.freelancer-contact, .ant-avatar {
+    display: inline-block;
+}
+.freelancer-general .ant-avatar {
+    position: absolute;
+    top: 0;
+}
+.full-name {
+    font-size: 20px;
+}
+.freelancer-phone, .full-name, .freelancer-username {
+    margin-left: 80px;
+}
+.freelancer-contact {
+    line-height: 5px;
+}

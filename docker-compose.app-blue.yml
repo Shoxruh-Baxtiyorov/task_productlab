@@ -1,0 +1,116 @@
+version: "3.9"
+
+networks:
+  dtaskbot-net:
+    external: true
+
+services:
+  backend-blue:
+    build: ./backend
+    image: ${CI_REGISTRY_IMAGE:-dtaskbot-local}/backend:${IMAGE_TAG:-latest}
+    container_name: backend-blue
+    restart: always
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    volumes:
+      - ./backend:/backend
+    ports:
+      - "8000:8000"
+    environment: &default-env
+      DB_NAME: ${DB_NAME}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      TOKEN: ${TOKEN}
+      RABBIT_HOST: ${RABBIT_HOST}
+      URL: ${URL}
+      ADMINS: ${ADMINS}
+      SUPPORT: ${SUPPORT}
+      BOT_ADDRESS: ${BOT_ADDRESS}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
+      S3_KEY_ID: ${S3_KEY_ID}
+      REQUIRED_CHANNEL_ID: ${REQUIRED_CHANNEL_ID}
+      REQUIRED_CHANNEL_USERNAME: ${REQUIRED_CHANNEL_USERNAME}
+    networks: [dtaskbot-net]
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 12
+      start_period: 40s
+
+  tg-bot-blue:
+    build: ./backend
+    image: ${CI_REGISTRY_IMAGE:-dtaskbot-local}/backend:${IMAGE_TAG:-latest}
+    container_name: tg-bot-blue
+    restart: on-failure
+    command: bash -c "alembic upgrade heads && python3.11 bot.py"
+    volumes:
+      - ./backend:/backend
+    environment:
+      DB_NAME: ${DB_NAME}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      TOKEN: ${TOKEN}
+      URL: ${URL}
+      BOT_ADDRESS: ${BOT_ADDRESS}
+      RABBIT_HOST: ${RABBIT_HOST}
+      ADMINS: ${ADMINS}
+    networks: [dtaskbot-net]
+
+  new-task-consumer-blue:
+    build: ./backend
+    image: ${CI_REGISTRY_IMAGE:-dtaskbot-local}/backend:${IMAGE_TAG:-latest}
+    container_name: new-task-consumer-blue
+    restart: on-failure
+    command: python3.11 distributors/new_task/main.py
+    volumes:
+      - ./backend:/backend
+    environment:
+      DB_NAME: ${DB_NAME}
+      DB_HOST: ${DB_HOST}
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      TOKEN: ${TOKEN}
+      URL: ${URL}
+      BOT_ADDRESS: ${BOT_ADDRESS}
+      RABBIT_HOST: ${RABBIT_HOST}
+      ADMINS: ${ADMINS}
+    networks: [dtaskbot-net]
+
+  massive-messaging-consumer-blue:
+    build: ./backend
+    image: ${CI_REGISTRY_IMAGE:-dtaskbot-local}/backend:${IMAGE_TAG:-latest}
+    container_name: massive-messaging-consumer-blue
+    restart: on-failure
+    command: python3.11 distributors/massive_messaging/main.py
+    volumes:
+      - ./backend:/backend
+    environment: *default-env
+    networks: [dtaskbot-net]
+
+  freelancer-task-consumer-blue:
+    build: ./backend
+    image: ${CI_REGISTRY_IMAGE:-dtaskbot-local}/backend:${IMAGE_TAG:-latest}
+    container_name: freelancer-task-consumer-blue
+    restart: on-failure
+    command: python3.11 distributors/freelancer_massages/main.py
+    volumes:
+      - ./backend:/backend
+    environment: *default-env
+    networks: [dtaskbot-net]
+
+  search-task-consumer-blue:
+    build: ./backend
+    image: ${CI_REGISTRY_IMAGE:-dtaskbot-local}/backend:${IMAGE_TAG:-latest}
+    container_name: search-task-consumer-blue
+    restart: on-failure
+    command: python3.11 distributors/search_tasks/main.py
+    volumes:
+      - ./backend:/backend
+    environment: *default-env
+    networks: [dtaskbot-net]

@@ -1,0 +1,15 @@
+div#contact {
+    display: flex;
+}
+div#username {
+    padding-left: 5px;
+}
+.ant-table-cell p {
+    text-overflow: ellipsis;
+}
+.offer-contact {
+    margin-left: 70px;
+}
+.control-offer button {
+    margin-top: 10px;
+}

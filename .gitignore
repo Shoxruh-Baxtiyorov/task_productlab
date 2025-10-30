@@ -1,0 +1,9 @@
+/.idea
+.env
+/database
+venv
+.venv
+yarn.lock
+
+
+

@@ -1,0 +1,5 @@
+upstream dtaskbot_upstream {
+    server localhost:8000;
+}
+
+

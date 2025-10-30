@@ -1,0 +1,225 @@
+stages:
+  - docker
+  - frontend
+  - webapp
+  - nginx
+  - bluegreen
+  - switch
+
+variables:
+  BLUE_GREEN: "false"
+
+# ---------- Blue/Green (опционально, не ломает текущий пайплайн) ----------
+
+deploy_inactive_color:
+  stage: bluegreen
+  rules:
+    - if: '$BLUE_GREEN == "true"'
+  needs:
+    - job: build_frontend
+      optional: true
+    - job: build_webapp
+      optional: true
+  tags:
+    - main-runner
+  before_script:
+    - |
+      if [ -L /etc/nginx/conf.d/dtaskbot-upstream-active.conf ] && readlink /etc/nginx/conf.d/dtaskbot-upstream-active.conf | grep -q blue; then
+        export ACTIVE_COLOR=blue
+      else
+        export ACTIVE_COLOR=green
+      fi
+      if [ "$ACTIVE_COLOR" = "blue" ]; then export INACTIVE_COLOR=green; else export INACTIVE_COLOR=blue; fi
+      echo "ACTIVE_COLOR=$ACTIVE_COLOR INACTIVE_COLOR=$INACTIVE_COLOR"
+    # Ensure core services are running (shared between blue/green)
+    - docker compose -f docker-compose.core.yml up -d
+  script:
+    # Deploy only app services (not core) to inactive color
+    - docker compose -f docker-compose.app-${INACTIVE_COLOR}.yml -p dtaskbot-${INACTIVE_COLOR} pull || true
+    - docker compose -f docker-compose.app-${INACTIVE_COLOR}.yml -p dtaskbot-${INACTIVE_COLOR} up -d --remove-orphans
+    - mkdir -p /var/www/deadlinetaskbot-${INACTIVE_COLOR} /var/www/webapp-${INACTIVE_COLOR}
+    - rm -rf /var/www/deadlinetaskbot-${INACTIVE_COLOR}/* /var/www/webapp-${INACTIVE_COLOR}/*
+    - cp -r frontend/build/* /var/www/deadlinetaskbot-${INACTIVE_COLOR}/
+    - cp -r WebApp/dist/* /var/www/webapp-${INACTIVE_COLOR}/
+
+smoke_tests_inactive:
+  stage: bluegreen
+  rules:
+    - if: '$BLUE_GREEN == "true"'
+  needs:
+    - deploy_inactive_color
+  tags:
+    - main-runner
+  script:
+    - |
+      set -e
+      if [ -L /etc/nginx/conf.d/dtaskbot-upstream-active.conf ] && readlink /etc/nginx/conf.d/dtaskbot-upstream-active.conf | grep -q blue; then
+        ACTIVE_COLOR=blue
+      else
+        ACTIVE_COLOR=green
+      fi
+      if [ "$ACTIVE_COLOR" = "blue" ]; then INACTIVE_COLOR=green; else INACTIVE_COLOR=blue; fi
+      echo "ACTIVE_COLOR=$ACTIVE_COLOR INACTIVE_COLOR=$INACTIVE_COLOR"
+      # Проверка backend контейнера в неактивном цвете
+      docker exec dtaskbot-${INACTIVE_COLOR}-backend-${INACTIVE_COLOR} true 2>/dev/null || true
+      # Проверка статики как наличие каталога
+      test -d /var/www/deadlinetaskbot-${INACTIVE_COLOR}
+      test -d /var/www/webapp-${INACTIVE_COLOR}
+
+nginx_switch_color:
+  stage: switch
+  rules:
+    - if: '$BLUE_GREEN == "true"'
+  needs:
+    - smoke_tests_inactive
+  tags:
+    - main-runner
+  script:
+    - |
+      set -e
+      if [ -L /etc/nginx/conf.d/dtaskbot-upstream-active.conf ] && readlink /etc/nginx/conf.d/dtaskbot-upstream-active.conf | grep -q blue; then
+        ACTIVE_COLOR=blue
+      else
+        ACTIVE_COLOR=green
+      fi
+      if [ "$ACTIVE_COLOR" = "blue" ]; then INACTIVE_COLOR=green; else INACTIVE_COLOR=blue; fi
+      
+      echo "Switching from ${ACTIVE_COLOR} to ${INACTIVE_COLOR}"
+      ln -sfn /etc/nginx/conf.d/dtaskbot-upstreams-${INACTIVE_COLOR} /etc/nginx/conf.d/dtaskbot-upstream-active.conf
+      ln -sfn /var/www/deadlinetaskbot-${INACTIVE_COLOR} /var/www/deadlinetaskbot
+      ln -sfn /var/www/webapp-${INACTIVE_COLOR} /var/www/webapp
+      
+      # Save the old color for cleanup in after_script
+      echo "ACTIVE_COLOR=${ACTIVE_COLOR}" > /tmp/gitlab_active_color.env
+  after_script:
+    - |
+      # Cleanup old containers if color was switched
+      if [ -f /tmp/gitlab_active_color.env ]; then
+        source /tmp/gitlab_active_color.env
+        echo "Traffic switched successfully. Stopping old ${ACTIVE_COLOR} containers..."
+        docker compose -f docker-compose.app-${ACTIVE_COLOR}.yml -p dtaskbot-${ACTIVE_COLOR} down || echo "No ${ACTIVE_COLOR} containers to stop"
+        rm /tmp/gitlab_active_color.env
+        echo "Cleanup complete"
+      fi
+    - sudo systemctl reload nginx
+
+
+# rollback_color:
+#  stage: switch
+#  rules:
+#    - if: '$BLUE_GREEN == "true"'
+#      when: manual
+#  tags:
+#    - main-runner
+#  script:
+#    - |
+#      set -e
+#      if [ -L /etc/nginx/conf.d/dtaskbot-upstream-active.conf ] && readlink /etc/nginx/conf.d/dtaskbot-upstream-active.conf | grep -q blue; then
+#        ACTIVE_COLOR=blue
+#      else
+#        ACTIVE_COLOR=green
+#      fi
+#      ln -sfn /etc/nginx/conf.d/dtaskbot-upstreams-${ACTIVE_COLOR} /etc/nginx/conf.d/dtaskbot-upstream-active.conf
+#      ln -sfn /var/www/deadlinetaskbot-${ACTIVE_COLOR} /var/www/deadlinetaskbot
+#      ln -sfn /var/www/webapp-${ACTIVE_COLOR} /var/www/webapp
+#      systemctl reload nginx
+
+build_docker:
+  stage: docker
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $BLUE_GREEN != "true"'
+      when: on_success
+  tags:
+    - main-runner
+  before_script:
+    - export S3_BACKUPS_ACCESSKEY="$S3_BACKUPS_ACCESSKEY" S3_BACKUPS_SECRETKEY="$S3_BACKUPS_SECRETKEY" S3_SECRET_KEY="$S3_SECRET_KEY" S3_ENDPOINT_URL="$S3_ENDPOINT_URL" S3_KEY_ID="$S3_KEY_ID" BOT_ADDRESS="$BOT_ADDRESS" ADMINS="$ADMINS" DB_NAME="$DB_NAME" DB_HOST="$DB_HOST" DB_PORT="$DB_PORT" DB_USER="$DB_USER" DB_PASSWORD="$DB_PASSWORD" TOKEN="$TOKEN" URL="$URL" RABBIT_HOST="$RABBIT_HOST" BACKUP_ALERT_PROJECT_NAME="$BACKUP_ALERT_PROJECT_NAME" BACKUP_ALERT_BOT_TOKEN="$BACKUP_ALERT_BOT_TOKEN" BACKUP_ALERT_CHAT_ID="$BACKUP_ALERT_CHAT_ID" VITE_API_BASE_URL="$VITE_API_BASE_URL" VITE_BOT_USERNAME="$VITE_BOT_USERNAME"
+    - docker compose build
+  script:
+    - docker compose up -d --force-recreate
+
+build_frontend:
+  stage: frontend
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: on_success
+  tags:
+    - main-runner
+  cache:
+    paths:
+      - frontend/node_modules/
+  before_script:
+    - source ~/.bashrc
+    - cd frontend/
+    - yarn install
+  script:
+    - DISABLE_ESLINT_PLUGIN=true REACT_APP_DTASKBOT_API_URL="$REACT_APP_DTASKBOT_API_URL" REACT_APP_BOT_URL="$BOT_ADDRESS" yarn build
+  artifacts:
+    paths:
+      - frontend/build/
+
+build_webapp:
+  stage: webapp
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: on_success
+  tags:
+    - main-runner
+  cache:
+    paths:
+      - WebApp/node_modules/
+  before_script:
+    - cd WebApp/
+    - yarn install
+  script:
+    - VITE_API_BASE_URL="$VITE_API_BASE_URL" VITE_BOT_USERNAME="$VITE_BOT_USERNAME" yarn build
+  artifacts:
+    paths:
+      - WebApp/dist/
+
+deploy_frontend:
+  stage: frontend
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $BLUE_GREEN != "true"'
+      when: on_success
+  tags:
+    - main-runner
+  needs:
+    - job: build_frontend
+      artifacts: true
+  before_script:
+    - ls frontend/
+    - mkdir -p /var/www/deadlinetaskbot
+    - rm -rf /var/www/deadlinetaskbot/*
+  script:
+    - cp -r frontend/build/* /var/www/deadlinetaskbot/
+
+deploy_webapp:
+  stage: webapp
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $BLUE_GREEN != "true"'
+      when: on_success
+  tags:
+    - main-runner
+  needs:
+    - job: build_webapp
+      artifacts: true
+  before_script:
+    - mkdir -p /var/www/webapp
+    - rm -rf /var/www/webapp/*
+  script:
+    - cp -r WebApp/dist/* /var/www/webapp/
+
+conf_nginx:
+  stage: nginx
+  tags:
+    - main-runner
+  rules:
+    - changes:
+      - nginx/**/*
+  before_script:
+    - cd nginx/
+  script:
+    - find . -name "*.conf" ! -name "nginx.conf" -exec cp {} /etc/nginx/conf.d \;
+    - cp nginx.conf /etc/nginx
+  after_script:
+    - sudo systemctl reload nginx
