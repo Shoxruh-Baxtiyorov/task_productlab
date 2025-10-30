@@ -11,10 +11,13 @@ from api.routers.segments.routers import router as segments_router
 from api.middlewares import FetchUserMiddleware
 
 app = FastAPI(
-    root_path="/api/v1",
+    openapi_url="/api/v1/openapi.json",
+    docs_url="/api/v1/docs",
+    redoc_url="/api/v1/redoc",
     openapi_tags=loader.FASTAPI_TAGS,
     version="1.0.0",
 )
+
 app.add_middleware(FetchUserMiddleware)
 app.add_middleware(
     CORSMiddleware,
