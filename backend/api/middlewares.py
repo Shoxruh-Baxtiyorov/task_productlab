@@ -8,43 +8,44 @@ from db.database import SessionLocal
 
 class FetchUserMiddleware(BaseHTTPMiddleware):
     """
-    Middleware для проверки токена и подготовки сессии БД
+    Middleware for verifying user token and preparing DB session.
     """
 
     async def dispatch(self, request: Request, call_next):
-        """
-        Готовит сессию БД и проверяет токен пользователя
-        :param request: запрос пользователя
-        :param call_next: функция эндпоинта
-        :return: ответ эндпоинта
-        """
+        path = request.url.path
 
-        root_path = "/api/v1"
-        path = request.url.path.rstrip('/')
-        if path.startswith(root_path):
-            path = path[len(root_path):] or '/'
+        if any(path.endswith(p) for p in ["/openapi.json", "/docs", "/redoc"]):
+            return await call_next(request)
 
-        if path in [
-            '/docs', 
-            '/openapi.json', 
-            '/health',
-            '/segments', 
-            '/tasks/freelancer/available',
-            '/users/check'
-        ] or path.startswith('/segments/freelancer_type_segments/') or path.startswith('/users/check/'):
+        public_paths = [
+            "/api/v1/health",
+            "/api/v1/tasks/freelancer/available",
+            "/api/v1/segments",
+            "/api/v1/users/check",
+        ]
+        if path in public_paths or \
+           path.startswith("/api/v1/segments/freelancer_type_segments/") or \
+           path.startswith("/api/v1/users/check/"):
             return await call_next(request)
 
         session = SessionLocal()
-        token = request.query_params.get('token')
-        try:
-            user = session.query(User).filter(User.token == token).first()
-        except:
-            user = None
+        token = request.query_params.get("token")
+        user = None
+
+        if token:
+            try:
+                user = session.query(User).filter(User.token == token).first()
+            except Exception:
+                user = None
+
         if not user:
             session.close()
             return JSONResponse({'error': 'You have to pass token to access this app.'}, status_code=401)
+
         request.state.user = user
         request.state.session = session
-        resp = await call_next(request)
+
+        response = await call_next(request)
+
         session.close()
-        return resp
+        return response
